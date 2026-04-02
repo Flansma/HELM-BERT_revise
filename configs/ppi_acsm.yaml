@@ -3,6 +3,8 @@
 # =============================================================================
 # Usage: python scripts/train_ppi.py --config configs/ppi_acsm.yaml
 
+experiment_name: ppi_acsm
+
 training:
   max_epochs: 70
 

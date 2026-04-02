@@ -1,0 +1,17 @@
+# =============================================================================
+# PPI - Random Split 5-Fold Cross-Validation
+# =============================================================================
+# Usage: python scripts/train_ppi.py --config configs/ppi_random_kfold.yaml
+
+experiment_name: ppi_random_5fold
+
+data:
+  split_name: random
+  kfold_file: ./data/downstream/Propedia_v2_ppi_5fold_random.csv
+  n_folds: 5
+  fold_column: fold
+  split_column: split
+
+paths:
+  output_dir: ./outputs/ppi_kfold
+  results_dir: ./results/ppi_kfold

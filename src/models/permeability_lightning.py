@@ -1,11 +1,7 @@
 """HELM-BERT Permeability Prediction Lightning Module.
 
-Evidential Deep Learning via Normal-Inverse-Gamma (NIG) distribution.
-Outputs (gamma, nu, alpha, beta) per sample for uncertainty-aware regression.
-
-References:
-    Amini et al. (2020) "Deep Evidential Regression" NeurIPS.
-    Soleimany et al. (2021) ACS Central Science.
+This module provides a PyTorch Lightning wrapper for permeability prediction
+using HELMBertForSequenceClassification with MLP head.
 """
 
 import logging
@@ -17,16 +13,11 @@ import lightning as L
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from transformers import AutoConfig, AutoModelForSequenceClassification
+from transformers import AutoModelForSequenceClassification, AutoConfig
 
-from src.losses.evidential import nig_loss
 from src.utils.metrics import compute_regression_metrics
 
 logger = logging.getLogger(__name__)
-
-# NIG output count: gamma, nu, alpha, beta
-NIG_NUM_OUTPUTS = 4
 
 
 @dataclass
@@ -41,20 +32,16 @@ class PermeabilityTrainingConfig:
     weight_decay: float
     freeze_encoder: bool
     max_epochs: int
+    early_stopping_patience: int
     classifier_dropout: float
     classifier_num_layers: int
     encoder_attribute_name: str
-    evidence_lambda_coeff: float
-    total_steps: int = 0
-    warmup_ratio: float = 0.01
-    decay_ratio: float = 0.10
 
 
 class HELMBertPermeabilityLightning(L.LightningModule):
-    """PyTorch Lightning module for evidential permeability prediction.
+    """PyTorch Lightning module for permeability prediction.
 
-    Uses HELMBertForSequenceClassification with NIG output head.
-    Outputs 4 parameters (gamma, nu, alpha, beta) per sample.
+    Uses HELMBertForSequenceClassification with 2-layer MLP head for regression.
 
     Args:
         model_name_or_path: HuggingFace Hub model ID or local path (required)
@@ -76,17 +63,18 @@ class HELMBertPermeabilityLightning(L.LightningModule):
 
         self.save_hyperparameters()
 
-        # Load config and set NIG 4-output head
+        # Load config and update for regression with MLP head
         logger.info(f"Loading model from {self.model_name_or_path}")
         config = AutoConfig.from_pretrained(
             self.model_name_or_path,
             trust_remote_code=self.trust_remote_code,
         )
-        config.num_labels = NIG_NUM_OUTPUTS
+        config.num_labels = 1
         config.problem_type = "regression"
         config.classifier_num_layers = self.training_config.classifier_num_layers
         config.classifier_dropout = self.training_config.classifier_dropout
 
+        # Load model with updated config
         self.model = AutoModelForSequenceClassification.from_pretrained(
             self.model_name_or_path,
             config=config,
@@ -98,6 +86,9 @@ class HELMBertPermeabilityLightning(L.LightningModule):
             for param in self._encoder.parameters():
                 param.requires_grad = False
             logger.info("Encoder frozen (freeze_encoder=True)")
+
+        # Loss function
+        self.loss_fn = nn.MSELoss()
 
         # Storage for metrics
         self.validation_outputs: List[Dict] = []
@@ -116,89 +107,59 @@ class HELMBertPermeabilityLightning(L.LightningModule):
         encoder_params = sum(p.numel() for p in self._encoder.parameters())
         classifier_params = sum(p.numel() for p in self.model.classifier.parameters())
 
-        logger.info("Permeability Model Configuration (Evidential NIG):")
+        logger.info("Permeability Model Configuration:")
         logger.info(f"  Encoder parameters: {encoder_params:,}")
         logger.info(f"  Classifier parameters: {classifier_params:,}")
         logger.info(f"  Total parameters: {total_params:,}")
         logger.info(
             f"  Classifier layers: {self.training_config.classifier_num_layers}"
         )
-        logger.info(f"  NIG outputs: {NIG_NUM_OUTPUTS}")
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-        """Forward pass with NIG parameterization.
-
-        Returns:
-            Dict with keys:
-                predictions: gamma (predicted mean) [batch, 1]
-                evidence_params: {gamma, nu, alpha, beta} each [batch]
-                uncertainty: {aleatoric, epistemic} each [batch]
-        """
+        """Forward pass."""
         outputs = self.model(
             input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],
             return_dict=True,
         )
-        logits = outputs.logits  # [batch, 4]
-
-        # NIG parameterization with constraints.
-        # dtype-aware eps floor: prevents beta/(nu*(alpha-1)) blowup across precisions.
-        eps = torch.finfo(logits.dtype).eps
-        gamma = logits[:, 0]
-        nu = F.softplus(logits[:, 1]) + eps
-        alpha = F.softplus(logits[:, 2]) + 1.0 + eps
-        beta = F.softplus(logits[:, 3]) + eps
-
-        alpha_minus_one = alpha - 1.0
-
-        return {
-            "predictions": gamma.unsqueeze(-1),
-            "evidence_params": {
-                "gamma": gamma,
-                "nu": nu,
-                "alpha": alpha,
-                "beta": beta,
-            },
-            "uncertainty": {
-                "aleatoric": beta / alpha_minus_one,
-                "epistemic": beta / (nu * alpha_minus_one),
-            },
-        }
+        return {"predictions": outputs.logits}
 
     def _compute_loss(
-        self, outputs: Dict[str, Any], targets: torch.Tensor
+        self, predictions: torch.Tensor, targets: torch.Tensor
     ) -> torch.Tensor:
-        """Compute NIG evidential loss with fixed regularization."""
-        params = outputs["evidence_params"]
-        targets_flat = targets.squeeze(-1) if targets.dim() > 1 else targets
-
-        return nig_loss(
-            y=targets_flat,
-            gamma=params["gamma"],
-            nu=params["nu"],
-            alpha=params["alpha"],
-            beta=params["beta"],
-            lambda_coeff=self.training_config.evidence_lambda_coeff,
-        )
+        """Compute MSE loss."""
+        if predictions.dim() > 1 and predictions.size(-1) == 1:
+            predictions = predictions.squeeze(-1)
+        if targets.dim() > 1 and targets.size(-1) == 1:
+            targets = targets.squeeze(-1)
+        return self.loss_fn(predictions, targets)
 
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         """Training step."""
         outputs = self(batch)
+        predictions = outputs["predictions"]
         targets = batch["target"].float()
 
-        loss = self._compute_loss(outputs, targets)
-        batch_size = targets.size(0)
+        loss = self._compute_loss(predictions, targets)
 
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=batch_size)
+        self.log(
+            "train_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=targets.size(0),
+        )
 
         return loss
 
     def validation_step(self, batch: Dict[str, Any], batch_idx: int) -> None:
         """Validation step."""
         outputs = self(batch)
+        predictions = outputs["predictions"]
         targets = batch["target"].float()
 
-        loss = self._compute_loss(outputs, targets)
+        loss = self._compute_loss(predictions, targets)
 
         self.log(
             "val_loss",
@@ -212,19 +173,18 @@ class HELMBertPermeabilityLightning(L.LightningModule):
 
         self.validation_outputs.append(
             {
-                "predictions": outputs["predictions"].detach(),
+                "predictions": predictions.detach(),
                 "targets": targets.detach(),
-                "aleatoric": outputs["uncertainty"]["aleatoric"].detach(),
-                "epistemic": outputs["uncertainty"]["epistemic"].detach(),
             }
         )
 
     def test_step(self, batch: Dict[str, Any], batch_idx: int) -> None:
         """Test step."""
         outputs = self(batch)
+        predictions = outputs["predictions"]
         targets = batch["target"].float()
 
-        loss = self._compute_loss(outputs, targets)
+        loss = self._compute_loss(predictions, targets)
 
         self.log(
             "test_loss",
@@ -237,21 +197,18 @@ class HELMBertPermeabilityLightning(L.LightningModule):
 
         self.test_outputs.append(
             {
-                "predictions": outputs["predictions"].detach(),
+                "predictions": predictions.detach(),
                 "targets": targets.detach(),
             }
         )
 
     def predict_step(self, batch: Dict[str, Any], batch_idx: int) -> Dict[str, Any]:
-        """Prediction step with uncertainty."""
+        """Prediction step."""
         outputs = self(batch)
 
         result = {
             "predictions": outputs["predictions"],
             "targets": batch["target"].float(),
-            "uncertainty": {
-                k: v.detach() for k, v in outputs["uncertainty"].items()
-            },
         }
 
         for key, value in batch.items():
@@ -281,13 +238,6 @@ class HELMBertPermeabilityLightning(L.LightningModule):
             outputs.clear()
             return
 
-        # Log mean uncertainty (validation only)
-        if prefix == "val" and "aleatoric" in outputs[0]:
-            all_aleatoric = torch.cat([x["aleatoric"] for x in outputs])
-            all_epistemic = torch.cat([x["epistemic"] for x in outputs])
-            self.log("val_mean_aleatoric", all_aleatoric.mean(), sync_dist=True)
-            self.log("val_mean_epistemic", all_epistemic.mean(), sync_dist=True)
-
         outputs.clear()
 
         metrics = compute_regression_metrics(all_predictions, all_targets)
@@ -295,14 +245,12 @@ class HELMBertPermeabilityLightning(L.LightningModule):
         prog_bar = prefix == "val"
         for metric_name, metric_value in metrics.items():
             if not np.isnan(metric_value):
-                self.log(f"{prefix}_{metric_name}", metric_value, prog_bar=prog_bar, sync_dist=True)
+                self.log(f"{prefix}_{metric_name}", metric_value, prog_bar=prog_bar)
 
         logger.info(f"{prefix} - RMSE: {metrics['rmse']:.4f}, R²: {metrics['r2']:.4f}")
 
     def configure_optimizers(self) -> Dict[str, Any]:
-        """Configure optimizers with differential learning rates and WSD scheduler."""
-        from src.utils.scheduler import create_wsd_scheduler
-
+        """Configure optimizers with differential learning rates."""
         param_groups = []
 
         # Only include encoder params if not frozen
@@ -321,18 +269,16 @@ class HELMBertPermeabilityLightning(L.LightningModule):
             param_groups, weight_decay=self.training_config.weight_decay
         )
 
-        scheduler = create_wsd_scheduler(
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
-            total_steps=self.training_config.total_steps,
-            warmup_ratio=self.training_config.warmup_ratio,
-            decay_ratio=self.training_config.decay_ratio,
+            T_max=self.training_config.max_epochs,
         )
 
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",
+                "interval": "epoch",
             },
         }
 

@@ -16,7 +16,7 @@ paths:
 # Model (common base)
 # =============================================================================
 model:
-  pretrained_path: Flansma/helm-bert
+  pretrained_path: ./checkpoints/helmbert-base
   trust_remote_code: true
 
 # =============================================================================
@@ -25,10 +25,8 @@ model:
 training:
   seed: 42
   weight_decay: 0.01
+  early_stopping_patience: 20
   gradient_clip_val: 1.0
-  # WSD (Warmup-Stable-Decay) scheduler
-  warmup_ratio: 0.01
-  decay_ratio: 0.20
 
 # =============================================================================
 # Data (common settings)
@@ -52,6 +50,16 @@ trainer:
   log_every_n_steps: 10
   deterministic: true
   float32_matmul_precision: high
+
+# =============================================================================
+# Checkpoint
+# =============================================================================
+checkpoint:
+  save_top_k: 10
+  filename_pattern: "{epoch}-{val_loss:.4f}"
+  monitor: val_loss
+  mode: min
+  save_last: true
 
 # =============================================================================
 # Display

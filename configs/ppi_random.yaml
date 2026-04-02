@@ -3,6 +3,8 @@
 # =============================================================================
 # Usage: python scripts/train_ppi.py --config configs/ppi_random.yaml
 
+experiment_name: ppi_random
+
 training:
   max_epochs: 50
 

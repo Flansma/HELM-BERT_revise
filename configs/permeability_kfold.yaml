@@ -1,0 +1,26 @@
+# =============================================================================
+# HELM-BERT Permeability 10-Fold Cross-Validation Configuration
+# =============================================================================
+# Inherits from permeability.yaml, switches to k-fold mode.
+#
+# Usage:
+#   python scripts/train_permeability.py --config configs/permeability_kfold.yaml
+
+experiment_name: permeability_cycpeptmpdb_random_10fold
+
+# =============================================================================
+# Paths
+# =============================================================================
+paths:
+  output_dir: ./outputs/permeability_kfold
+  results_dir: ./results/permeability_kfold
+
+# =============================================================================
+# Data (k-fold mode)
+# =============================================================================
+data:
+  kfold_file: ./data/downstream/cycpeptmpdb_permeability_random_10fold.csv
+  n_folds: 10
+  fold_column: fold
+  split_column: split
+  split_name: cycpeptmpdb_kfold

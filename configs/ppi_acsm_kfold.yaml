@@ -1,0 +1,17 @@
+# =============================================================================
+# PPI - aCSM Split 5-Fold Cross-Validation
+# =============================================================================
+# Usage: python scripts/train_ppi.py --config configs/ppi_acsm_kfold.yaml
+
+experiment_name: ppi_acsm_5fold
+
+data:
+  split_name: acsm
+  kfold_file: ./data/downstream/Propedia_v2_ppi_5fold_acsm.csv
+  n_folds: 5
+  fold_column: fold
+  split_column: split
+
+paths:
+  output_dir: ./outputs/ppi_kfold
+  results_dir: ./results/ppi_kfold

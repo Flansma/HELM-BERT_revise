@@ -35,8 +35,8 @@ model:
 # Training
 # =============================================================================
 training:
-  max_epochs: 100
-  batch_size: 128
+  max_epochs: 500
+  batch_size: 64
   learning_rate: 1.0e-4
 
 # =============================================================================
@@ -49,13 +49,13 @@ data:
   # Datasets to combine for MLM training
   datasets:
     - name: chembl
-      file: chembl_deduplicated.csv
+      file: chembl_v2_deduplicated.csv
       helm_column: helm_notation
     - name: cycpeptmpdb
       file: cycpeptmpdb_deduplicated.csv
       helm_column: HELM
     - name: propedia
-      file: propedia_deduplicated.csv
+      file: propedia_v2_deduplicated.csv
       helm_column: Peptide_HELM
 
   # Span Masking Configuration (SpanBERT-style)

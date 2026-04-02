@@ -8,6 +8,8 @@
 #   python scripts/train_permeability.py
 #   python scripts/train_permeability.py model.freeze_encoder=true
 
+experiment_name: permeability_cycpeptmpdb
+
 # =============================================================================
 # Paths
 # =============================================================================
@@ -31,7 +33,7 @@ model:
 # Training
 # =============================================================================
 training:
-  max_epochs: 100
+  max_epochs: 200
   batch_size: 32
   encoder_lr: 3.0e-5
   head_lr: 1.0e-4
@@ -62,19 +64,4 @@ batch_keys:
   attention_mask: attention_mask
   target: target
 
-# =============================================================================
-# Evidential Deep Learning (Normal-Inverse-Gamma regression)
-# =============================================================================
-evidence:
-  lambda_coeff: 0.01
-
-# =============================================================================
-# Checkpoint
-# =============================================================================
-checkpoint:
-  monitor: val_mse
-  mode: min
-  filename_pattern: "{epoch}-{val_mse:.4f}"
-  save_top_k: 10
-  save_last: true
 
